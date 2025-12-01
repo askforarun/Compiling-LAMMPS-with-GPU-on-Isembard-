@@ -1,6 +1,5 @@
-# Compiling-LAMMPS-with-GPU-on-Isembard-
-
-Here are the steps 
+#Compilation Instructions (LAMMPS + KOKKOS + CUDA on Isambard-AI)#
+Compilation Instructions (LAMMPS + KOKKOS + CUDA on Isambard-AI)
 
 module purge
 module load brics/default brics/userenv
@@ -20,7 +19,7 @@ nvcc --version    # CUDA 12.6
 export NVCC_WRAPPER_DEFAULT_COMPILER=$(which g++)
 
 
-cd /scratch/<your_username>/lammps-22Jul2025
+cd /scratch/arun/lammps-22Jul2025
 rm -rf build-kokkos-gpu
 mkdir build-kokkos-gpu
 cd build-kokkos-gpu
