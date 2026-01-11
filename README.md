@@ -1,148 +1,174 @@
-# Building LAMMPS (KOKKOS + CUDA) on Isambard-AI (H100 GPU Nodes)
+# Compiling LAMMPS with GPU (Kokkos + CUDA) on Isambard
 
-This guide explains how to compile **LAMMPS 22Jul2025** with **GPU acceleration (KOKKOS + CUDA)** on **Isambard-AI** GPU nodes.  
-Isambard-AI uses **NVIDIA H100 (Hopper, SM_90)** GPUs.
+This repository documents a **reproducible, CMake-based workflow** for compiling **LAMMPS with GPU support** on **Isambard (Cray/HPE system)** using:
 
-The build uses the **KOKKOS** backend (recommended by LAMMPS for modern GPUs).
+- MPI (Cray wrappers)
+- Kokkos + CUDA
+- OpenMP
+- FFTW (via `cray-fftw`)
+- Additional LAMMPS packages (KSPACE, MISC, MC, EXTRA-MOLECULE, etc.)
 
----
-
-# 1. Start a GPU Interactive Session
-
-```bash
-srun -N 1 --gpus 1 --time=01:00:00 --pty bash
-```
+⚠️ **Important**: This guide assumes you are using the **CMake build system only**.  
+Mixing CMake with the legacy make-based build system (`make yes-*`) will cause build failures.
 
 ---
 
-# 2. Load Required Modules
+## System assumptions
+
+- Isambard / Cray programming environment
+- NVIDIA GPUs (H100 / Hopper)
+- Cray compiler wrappers available:
+  - `cc` (C)
+  - `ftn` (Fortran)
+  - `nvcc_wrapper` (C++ via `$NVCCWRAP`)
+- LAMMPS source tree cloned locally
+
+---
+
+## 1️⃣ Clone LAMMPS
 
 ```bash
-module purge
-module load brics/default brics/userenv
-module load PrgEnv-gnu
-module load craype-network-ofi
-module load gcc-native/13.2
-module load cuda/12.6
-
-export CRAYPE_LINK_TYPE=dynamic
-```
-
-### Check compilers:
-
-```bash
-g++ --version     # should show GCC 13.x
-nvcc --version    # should show CUDA 12.6
-```
-
-### Tell Kokkos which compiler to use:
-
-```bash
-export NVCC_WRAPPER_DEFAULT_COMPILER=$(which g++)
+git clone https://github.com/lammps/lammps.git
+cd lammps
 ```
 
 ---
 
-# 3. Prepare a Clean Build Directory
+## 2️⃣ **MANDATORY**: Clean legacy make-based build artifacts
 
 ```bash
-cd /scratch/u5ec/ass2009.u5ec/lammps-22Jul2025
-rm -rf build-kokkos-gpu
-mkdir build-kokkos-gpu
-cd build-kokkos-gpu
+make -C src no-all purge
 ```
 
 ---
 
-# 4. Use an Absolute Path to nvcc_wrapper
+## 3️⃣ Load required modules (Isambard)
 
 ```bash
-NVCCWRAP=$(cd .. && pwd)/lib/kokkos/bin/nvcc_wrapper
-echo $NVCCWRAP
-```
-
-Expected output:
-
-```
-/scratch/u5ec/ass2009.u5ec/lammps-22Jul2025/lib/kokkos/bin/nvcc_wrapper
+module load cray-fftw
 ```
 
 ---
 
-# 5. Configure LAMMPS (KOKKOS + CUDA for H100 / Hopper)
+## 4️⃣ Create a clean out-of-source build directory
 
 ```bash
-cmake ../cmake   -D CMAKE_C_COMPILER=cc   -D CMAKE_CXX_COMPILER=$NVCCWRAP   -D CMAKE_Fortran_COMPILER=ftn   -D BUILD_MPI=on   -D PKG_KOKKOS=on   -D Kokkos_ENABLE_CUDA=on   -D Kokkos_ENABLE_OPENMP=on   -D Kokkos_ARCH_HOPPER90=ON   -D CMAKE_BUILD_TYPE=Release
-```
-
-### If Hopper is not recognised:
-
-```bash
--D Kokkos_ARCH_AMPERE80=ON
+rm -rf build
+mkdir build
+cd build
 ```
 
 ---
 
-# 6. Build LAMMPS
+## 5️⃣ Full CMake configuration (GPU + additional packages)
 
 ```bash
-cmake --build . -j 16
-```
-
-Executable appears as:
-
-```bash
-./lmp
+cmake ../cmake \
+  -D CMAKE_C_COMPILER=cc \
+  -D CMAKE_CXX_COMPILER=$NVCCWRAP \
+  -D CMAKE_Fortran_COMPILER=ftn \
+  -D BUILD_MPI=on \
+  -D PKG_KOKKOS=on \
+  -D Kokkos_ENABLE_CUDA=on \
+  -D Kokkos_ENABLE_OPENMP=on \
+  -D Kokkos_ARCH_HOPPER90=ON \
+  -D PKG_KSPACE=on \
+  -D PKG_MISC=on \
+  -D PKG_MC=on \
+  -D PKG_EXTRA-MOLECULE=on \
+  -D FFT=FFTW3 \
+  -D CMAKE_BUILD_TYPE=Release
 ```
 
 ---
 
-# 7. Optional: Quick GPU Test
+## 6️⃣ Build LAMMPS
 
 ```bash
-srun -N 1 --gpus 1 ./lmp   -sf kk   -pk kokkos neigh half gpu/host   -in ../examples/KOKKOS/in.lj
+cmake --build . -j
 ```
 
 ---
 
-# 8. Example SLURM Script for Production Runs
+## 7️⃣ Verify enabled packages
 
-Create: `run_lammps_gpu.slurm`
+```bash
+./lmp -h | grep -A5 "Installed packages"
+```
+
+---
+
+## 8️⃣ Automated build using a bash script
+
+See `build_lammps_gpu.sh` in this repository.
+
+```bash
+chmod +x build_lammps_gpu.sh
+./build_lammps_gpu.sh
+```
+
+---
+
+## 9️⃣ Example SLURM script for production GPU runs
+
+Save as `run_lammps_gpu.slurm`:
 
 ```bash
 #!/bin/bash
-#SBATCH --job-name=lammps_gpu
+#SBATCH --job-name=lmp_gpu
+#SBATCH --account=<YOUR_ACCOUNT>
+#SBATCH --partition=gpu
 #SBATCH --nodes=1
-#SBATCH --gpus-per-node=1
-#SBATCH --time=02:00:00
-#SBATCH --account=<your_project>
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=32
+#SBATCH --gpus=1
+#SBATCH --time=24:00:00
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.err
+
+set -euo pipefail
 
 module purge
-module load brics/default brics/userenv
-module load PrgEnv-gnu
-module load craype-network-ofi
-module load gcc-native/13.2
-module load cuda/12.6
+module load cray-fftw
 
-export CRAYPE_LINK_TYPE=dynamic
-export NVCC_WRAPPER_DEFAULT_COMPILER=$(which g++)
+LAMMPS_EXE="$SLURM_SUBMIT_DIR/build/lmp"
+INPUT="$SLURM_SUBMIT_DIR/in.lammps"
 
-cd /scratch/<your_username>/lammps-22Jul2025/build-kokkos-gpu
+export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export OMP_PROC_BIND=spread
+export OMP_PLACES=cores
 
-srun ./lmp -sf kk -pk kokkos neigh half gpu/host -in /path/to/input.in
+srun --mpi=pmix \
+  "${LAMMPS_EXE}" \
+  -in "${INPUT}" \
+  -k on g 1 \
+  -sf kk \
+  -pk kokkos newton on neigh full comm device \
+  -pk kokkos omp ${OMP_NUM_THREADS}
 ```
 
-Submit job:
-
+Submit the job:
 ```bash
 sbatch run_lammps_gpu.slurm
 ```
 
 ---
 
-# 9. Summary
+## ❌ Common mistakes
 
-- Targets **NVIDIA H100 (Hopper)** via `Kokkos_ARCH_HOPPER90=ON`  
-- Uses recommended **KOKKOS** backend  
-- Requires **gcc-native/13.2**  
-- Uses an absolute path for `nvcc_wrapper` to avoid CMake errors  
+- Mixing make-based and CMake-based builds
+- Forgetting `make -C src no-all purge`
+- Building inside `src/`
+- Enabling KSPACE without FFTW
+
+---
+
+## ✅ Summary
+
+This workflow is:
+
+- ✔ CMake-clean  
+- ✔ GPU-ready (Kokkos + CUDA)  
+- ✔ Cray/Isambard compatible  
+- ✔ Safe for adding new LAMMPS packages  
+- ✔ Suitable for production GPU runs  
