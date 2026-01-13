@@ -46,11 +46,12 @@ make -C src no-all purge
 
 ```bash
 module purge
-module load PrgEnv-cray
+module load craype-network-ofi
+module load PrgEnv-gnu/8.6.0
 module load cray-mpich
-module load libfabric
-module load cray-python/3.11.7
+module load libfabric/1.22.0
 module load cray-fftw
+module load cuda/12.6
 ```
 
 ---
