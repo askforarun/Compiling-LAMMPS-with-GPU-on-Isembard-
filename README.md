@@ -45,6 +45,11 @@ make -C src no-all purge
 ## 3️⃣ Load required modules (Isambard)
 
 ```bash
+module purge
+module load PrgEnv-cray
+module load cray-mpich
+module load libfabric
+module load cray-python/3.11.7
 module load cray-fftw
 ```
 
