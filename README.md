@@ -1,180 +1,145 @@
-# Compiling LAMMPS with GPU (Kokkos + CUDA) on Isambard
+# Compiling LAMMPS with GPU (Kokkos + CUDA) and MPI on Isambard‑AI
 
-This repository documents a **reproducible, CMake-based workflow** for compiling **LAMMPS with GPU support** on **Isambard (Cray/HPE system)** using:
+This guide explains how to **compile LAMMPS with GPU support using Kokkos + CUDA and MPI**
+on **Isambard‑AI**.  
+The build is **MPI‑only on the host** (no OpenMP).
 
-- MPI (Cray wrappers)
-- Kokkos + CUDA
-- OpenMP
-- FFTW (via `cray-fftw`)
-- Additional LAMMPS packages (KSPACE, MISC, MC, EXTRA-MOLECULE, etc.)
-
-⚠️ **Important**: This guide assumes you are using the **CMake build system only**.  
-Mixing CMake with the legacy make-based build system (`make yes-*`) will cause build failures.
+> This README intentionally **does not include any Slurm job scripts**.  
+> It focuses only on building LAMMPS.
 
 ---
 
-## System assumptions
+## Summary of the build
 
-- Isambard / Cray programming environment
-- NVIDIA GPUs (H100 / Hopper)
-- Cray compiler wrappers available:
-  - `cc` (C)
-  - `ftn` (Fortran)
-  - `nvcc_wrapper` (C++ via `$NVCCWRAP`)
-- LAMMPS source tree cloned locally
+- MPI: **Cray MPICH**
+- GPU backend: **Kokkos + CUDA**
+- Host parallelism: **MPI only (OpenMP disabled)**
+- FFT: **cray‑fftw**
+- Target GPU: **NVIDIA GH200 / Hopper**
 
 ---
 
-## 1️⃣ Clone LAMMPS
+## 1. Prerequisites
+
+- Access to **Isambard‑AI**
+- A clean LAMMPS source tree cloned from GitHub
 
 ```bash
 git clone https://github.com/lammps/lammps.git
 cd lammps
 ```
 
----
+All commands below assume you are **inside the LAMMPS source root directory**:
 
-## 2️⃣ **MANDATORY**: Clean legacy make-based build artifacts
-
-```bash
-make -C src no-all purge
+```
+lammps/
+ ├── cmake/
+ ├── src/
+ └── lib/kokkos/bin/nvcc_wrapper
 ```
 
 ---
 
-## 3️⃣ Load required modules (Isambard)
+## 2. Module environment (warning‑free)
+
+On Isambard, `PrgEnv-gnu` can emit a harmless Lmod warning.
+To keep logs clean, we silence module stderr **inside the build script**.
+
+The build script loads:
+
+- `craype`
+- `craype-network-ofi`
+- `PrgEnv-gnu`
+- `cray-mpich`
+- `cuda`
+- `cpe-cuda`
+- `cray-fftw`
+
+You do **not** need to load modules manually if you use the provided script.
+
+---
+
+## 3. Build script (recommended)
+
+This repository provides a fully automated build script:
+
+```
+build_lammps_gpus.sh
+```
+
+### What the script does
+
+- Verifies it is run from the LAMMPS source root
+- Loads the correct Isambard‑AI modules
+- Uses Cray MPI compiler wrappers (`cc`, `CC`, `ftn`)
+- Enables:
+  - MPI
+  - Kokkos
+  - CUDA
+- Disables:
+  - OpenMP
+- Builds LAMMPS using CMake (out‑of‑source build)
+
+---
+
+## 4. How to build
+
+From the **LAMMPS source root directory**:
 
 ```bash
-module purge
-module load craype-network-ofi
-module load PrgEnv-gnu/8.6.0
-module load cray-mpich
-module load libfabric/1.22.0
-module load cray-fftw
-module load cuda/12.6
+chmod +x build_lammps_gpus.sh
+./build_lammps_gpus.sh
+```
+
+The build directory created is:
+
+```
+build-kokkos-cuda-mpi/
+```
+
+The resulting executable will be:
+
+```
+build-kokkos-cuda-mpi/lmp
 ```
 
 ---
 
-## 4️⃣ Create a clean out-of-source build directory
+## 5. Verify the build
+
+After compilation:
 
 ```bash
-rm -rf build
-mkdir build
-cd build
+./build-kokkos-cuda-mpi/lmp -h | grep -A8 "Accelerator configuration"
+```
+
+You should see:
+
+- KOKKOS enabled
+- CUDA enabled
+- MPI enabled (Cray MPICH)
+- No OpenMP requirement
+
+You can also check MPI explicitly:
+
+```bash
+./build-kokkos-cuda-mpi/lmp -h | grep MPI
 ```
 
 ---
 
-## 5️⃣ Full CMake configuration (GPU + additional packages)
+## 6. Notes
 
-```bash
-cmake ../cmake \
-  -D CMAKE_C_COMPILER=cc \
-  -D CMAKE_CXX_COMPILER=$NVCCWRAP \
-  -D CMAKE_Fortran_COMPILER=ftn \
-  -D BUILD_MPI=on \
-  -D PKG_KOKKOS=on \
-  -D Kokkos_ENABLE_CUDA=on \
-  -D Kokkos_ENABLE_OPENMP=on \
-  -D Kokkos_ARCH_HOPPER90=ON \
-  -D PKG_KSPACE=on \
-  -D PKG_MISC=on \
-  -D PKG_MC=on \
-  -D PKG_EXTRA-MOLECULE=on \
-  -D FFT=FFTW3 \
-  -D CMAKE_BUILD_TYPE=Release
-```
+- This build is suitable for **GPU‑accelerated LAMMPS runs using MPI ranks**.
+- OpenMP is intentionally disabled to avoid Kokkos OpenMP warnings and to keep
+  the execution model simple and robust.
+- Runtime GPU/CPU configuration is handled entirely at job‑submission time.
 
 ---
 
-## 6️⃣ Build LAMMPS
+## 7. Files provided
 
-```bash
-cmake --build . -j
-```
+- `README.md` – this document
+- `build_lammps_gpus.sh` – automated build script for Isambard‑AI
 
----
-
-## 7️⃣ Verify enabled packages
-
-```bash
-./lmp -h | grep -A5 "Installed packages"
-```
-
----
-
-## 8️⃣ Automated build using a bash script
-
-See `build_lammps_gpu.sh` in this repository.
-
-```bash
-chmod +x build_lammps_gpu.sh
-./build_lammps_gpu.sh
-```
-
----
-
-## 9️⃣ Example SLURM script for production GPU runs
-
-Save as `run_lammps_gpu.slurm`:
-
-```bash
-#!/bin/bash
-#SBATCH --job-name=lmp_gpu
-#SBATCH --account=<YOUR_ACCOUNT>
-#SBATCH --partition=gpu
-#SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=32
-#SBATCH --gpus=1
-#SBATCH --time=24:00:00
-#SBATCH --output=%x-%j.out
-#SBATCH --error=%x-%j.err
-
-set -euo pipefail
-
-module purge
-module load cray-fftw
-
-LAMMPS_EXE="$SLURM_SUBMIT_DIR/build/lmp"
-INPUT="$SLURM_SUBMIT_DIR/in.lammps"
-
-export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
-export OMP_PROC_BIND=spread
-export OMP_PLACES=cores
-
-srun --mpi=pmix \
-  "${LAMMPS_EXE}" \
-  -in "${INPUT}" \
-  -k on g 1 \
-  -sf kk \
-  -pk kokkos newton on neigh full comm device \
-  -pk kokkos omp ${OMP_NUM_THREADS}
-```
-
-Submit the job:
-```bash
-sbatch run_lammps_gpu.slurm
-```
-
----
-
-## ❌ Common mistakes
-
-- Mixing make-based and CMake-based builds
-- Forgetting `make -C src no-all purge`
-- Building inside `src/`
-- Enabling KSPACE without FFTW
-
----
-
-## ✅ Summary
-
-This workflow is:
-
-- ✔ CMake-clean  
-- ✔ GPU-ready (Kokkos + CUDA)  
-- ✔ Cray/Isambard compatible  
-- ✔ Safe for adding new LAMMPS packages  
-- ✔ Suitable for production GPU runs  
+You are now ready to run GPU‑accelerated LAMMPS jobs using MPI.
