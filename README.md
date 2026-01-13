@@ -1,145 +1,178 @@
-# Compiling LAMMPS with GPU (Kokkos + CUDA) and MPI on Isambard‑AI
+# Compiling LAMMPS with GPU (Kokkos + CUDA) and MPI on Isambard-AI
 
-This guide explains how to **compile LAMMPS with GPU support using Kokkos + CUDA and MPI**
-on **Isambard‑AI**.  
-The build is **MPI‑only on the host** (no OpenMP).
+This guide documents a **working, reproducible procedure** to compile **LAMMPS**
+with:
 
-> This README intentionally **does not include any Slurm job scripts**.  
-> It focuses only on building LAMMPS.
+- MPI (Cray MPICH)
+- GPU acceleration via **Kokkos + CUDA**
+- OpenMP disabled (MPI-only on host)
+- Target: **NVIDIA GH200 / Hopper (Isambard-AI)**
 
----
-
-## Summary of the build
-
-- MPI: **Cray MPICH**
-- GPU backend: **Kokkos + CUDA**
-- Host parallelism: **MPI only (OpenMP disabled)**
-- FFT: **cray‑fftw**
-- Target GPU: **NVIDIA GH200 / Hopper**
+This README is intentionally **step-by-step**, without scripts or Slurm files.
 
 ---
 
 ## 1. Prerequisites
 
-- Access to **Isambard‑AI**
-- A clean LAMMPS source tree cloned from GitHub
+- Access to **Isambard-AI**
+- CUDA-capable login/build environment
+- LAMMPS source code (July 22, 2025 or compatible)
+
+Clone LAMMPS:
 
 ```bash
 git clone https://github.com/lammps/lammps.git
 cd lammps
 ```
 
-All commands below assume you are **inside the LAMMPS source root directory**:
+You **must** be in the **LAMMPS source root**, which should contain:
 
-```
-lammps/
- ├── cmake/
- ├── src/
- └── lib/kokkos/bin/nvcc_wrapper
+```text
+cmake/
+src/
+lib/kokkos/bin/nvcc_wrapper
 ```
 
 ---
 
-## 2. Module environment (warning‑free)
+## 2. Load required modules (Isambard-AI)
 
-On Isambard, `PrgEnv-gnu` can emit a harmless Lmod warning.
-To keep logs clean, we silence module stderr **inside the build script**.
-
-The build script loads:
-
-- `craype`
-- `craype-network-ofi`
-- `PrgEnv-gnu`
-- `cray-mpich`
-- `cuda`
-- `cpe-cuda`
-- `cray-fftw`
-
-You do **not** need to load modules manually if you use the provided script.
-
----
-
-## 3. Build script (recommended)
-
-This repository provides a fully automated build script:
-
-```
-build_lammps_gpus.sh
-```
-
-### What the script does
-
-- Verifies it is run from the LAMMPS source root
-- Loads the correct Isambard‑AI modules
-- Uses Cray MPI compiler wrappers (`cc`, `CC`, `ftn`)
-- Enables:
-  - MPI
-  - Kokkos
-  - CUDA
-- Disables:
-  - OpenMP
-- Builds LAMMPS using CMake (out‑of‑source build)
-
----
-
-## 4. How to build
-
-From the **LAMMPS source root directory**:
+Run these **exactly in this order**:
 
 ```bash
-chmod +x build_lammps_gpus.sh
-./build_lammps_gpus.sh
+module purge
+module load craype/2.7.34
+module load craype-network-ofi
+module load PrgEnv-gnu/8.6.0
+module load cray-mpich/8.1.32
+module load libfabric/1.22.0
+module load cray-fftw/3.3.10.10
+module load cuda/12.6
+module load cpe-cuda/25.03
 ```
 
-The build directory created is:
+You may see an Lmod warning about `cray-mpich` and network targeting.
+This warning is **harmless** and does **not** affect the build.
 
-```
-build-kokkos-cuda-mpi/
+---
+
+## 3. Compiler sanity check
+
+Ensure the Cray compiler wrappers exist:
+
+```bash
+which cc
+which CC
+which ftn
+which nvcc
 ```
 
-The resulting executable will be:
+All commands must return valid paths.
 
+---
+
+## 4. CUDA vs GCC version issue (critical)
+
+CUDA 12.6 does **not** support GCC 14 as a host compiler.
+On Isambard-AI, `PrgEnv-gnu` may force GCC 14.
+
+The solution is to explicitly tell **nvcc_wrapper** which compiler to use.
+
+From the **LAMMPS source root**:
+
+```bash
+export NVCCWRAP=$PWD/lib/kokkos/bin/nvcc_wrapper
+export CRAYPE_LINK_TYPE=dynamic
 ```
+
+Find a **GCC 13** compiler path:
+
+```bash
+which -a g++ | head -10
+```
+
+Identify the **GCC 13.x** path and set:
+
+```bash
+export NVCC_WRAPPER_DEFAULT_COMPILER=/path/to/g++-13
+```
+
+Example:
+
+```bash
+export NVCC_WRAPPER_DEFAULT_COMPILER=/opt/cray/pe/gcc-native/13.2/bin/g++
+```
+
+---
+
+## 5. Clean old builds (recommended)
+
+```bash
+make -C src no-all purge || true
+```
+
+---
+
+## 6. Create a fresh build directory
+
+```bash
+rm -rf build-kokkos-cuda-mpi
+mkdir build-kokkos-cuda-mpi
+cd build-kokkos-cuda-mpi
+```
+
+---
+
+## 7. Configure LAMMPS with CMake (MPI + CUDA, no OpenMP)
+
+```bash
+cmake ../cmake   -D CMAKE_C_COMPILER=cc   -D CMAKE_CXX_COMPILER=$NVCCWRAP   -D CMAKE_Fortran_COMPILER=ftn   -D BUILD_MPI=on   -D PKG_KOKKOS=on   -D Kokkos_ENABLE_CUDA=on   -D Kokkos_ENABLE_OPENMP=off   -D Kokkos_ARCH_HOPPER90=ON   -D PKG_KSPACE=on   -D PKG_MISC=on   -D PKG_MC=on   -D PKG_EXTRA-MOLECULE=on   -D FFT=FFTW3   -D CMAKE_BUILD_TYPE=Release
+```
+
+Successful configuration ends with:
+
+```text
+Build files have been written to: .../build-kokkos-cuda-mpi
+```
+
+---
+
+## 8. Build LAMMPS
+
+```bash
+cmake --build . -j 8
+```
+
+The binary will be:
+
+```bash
 build-kokkos-cuda-mpi/lmp
 ```
 
 ---
 
-## 5. Verify the build
-
-After compilation:
+## 9. Verify the build
 
 ```bash
-./build-kokkos-cuda-mpi/lmp -h | grep -A8 "Accelerator configuration"
+./lmp -h | grep -A8 "Accelerator configuration"
+./lmp -h | grep -A5 "MPI v"
 ```
 
-You should see:
-
-- KOKKOS enabled
-- CUDA enabled
-- MPI enabled (Cray MPICH)
-- No OpenMP requirement
-
-You can also check MPI explicitly:
-
-```bash
-./build-kokkos-cuda-mpi/lmp -h | grep MPI
-```
+You should see KOKKOS, CUDA, and MPI enabled.
 
 ---
 
-## 6. Notes
+## 10. Notes
 
-- This build is suitable for **GPU‑accelerated LAMMPS runs using MPI ranks**.
-- OpenMP is intentionally disabled to avoid Kokkos OpenMP warnings and to keep
-  the execution model simple and robust.
-- Runtime GPU/CPU configuration is handled entirely at job‑submission time.
+- Optimised for **MPI + GPU**
+- Avoid legacy `package gpu` commands
+- Use Kokkos at runtime with:
+  ```bash
+  -k on g 1 -sf kk
+  ```
 
 ---
 
-## 7. Files provided
+## 11. Status
 
-- `README.md` – this document
-- `build_lammps_gpus.sh` – automated build script for Isambard‑AI
-
-You are now ready to run GPU‑accelerated LAMMPS jobs using MPI.
+Tested and working on **Isambard-AI (GH200)**.
